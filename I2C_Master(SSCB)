@@ -1,0 +1,111 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+use IEEE.STD_LOGIC_UNSIGNED.ALL;
+
+entity SSCB is
+    Port ( not_finished    : in  std_logic; -- complement of finished signal, if finished is low, registers keep being sent.
+           clk             : in  std_logic; --50 MHz	
+           ov_value        : in  std_logic_vector (7 downto 0); --register values to be sent 
+           ov_address      : in  std_logic_vector (7 downto 0); --register address on the camera 
+           siod            : out  std_logic; 
+           sioc            : out  std_logic;
+		   package_done    : out  std_logic); --goes high when a package of 3 phase transmission is completed       
+end SSCB;
+
+architecture behavioral of SSCB is
+	signal   counter          : std_logic_vector (7 downto 0) := "00000001"; -- this value gives a 254 cycle pause before the initial frame is sent
+	signal   busy_signal_reg  : std_logic_vector(31 downto 0) := (others => '0');
+	signal   data_signal_reg  : std_logic_vector(31 downto 0) := (others => '1');
+	constant camera_address : std_logic_vector(7 downto 0) := x"42";
+	
+begin
+
+	process(clk)
+	begin
+		if rising_edge(clk) then
+			package_done <= '0';
+			if busy_signal_reg(31) = '0' then
+				sioc <= '1'; --sioc should be 1 before transmission starts.
+				if not_finished = '1' then--not_finished is 0 when config is finished
+					if counter = "00000000" then
+						data_signal_reg <= "100" &   camera_address & '0'  &   ov_address & '0' & ov_value & '0' & "01";--start phases and stop
+						busy_signal_reg <= "111" & "111111111" & "111111111" & "111111111" & "11";
+						package_done <= '1'; --only goes high when data is formed successfully because we need get the next data
+					else
+						counter <= counter+1; -- this only happens on first boot, wait before the transmission starts.
+					end if;
+				end if;
+			else
+				case busy_signal_reg(31 downto 29) & busy_signal_reg(2 downto 0) is
+					when "111"&"111" => 
+						case counter(7 downto 6) is
+							when "00"   => sioc <= '1';
+							when "01"   => sioc <= '1';
+							when "10"   => sioc <= '1';
+							when others => sioc <= '1';
+						end case;
+					when "111"&"110" => 
+						case counter(7 downto 6) is
+							when "00"   => sioc <= '1';
+							when "01"   => sioc <= '1';
+							when "10"   => sioc <= '1';
+							when others => sioc <= '1';
+						end case;
+					when "111"&"100" => 
+						case counter(7 downto 6) is
+							when "00"   => sioc <= '0';
+							when "01"   => sioc <= '0';
+							when "10"   => sioc <= '0';
+							when others => sioc <= '0';
+						end case;
+					when "110"&"000" => 
+						case counter(7 downto 6) is
+							when "00"   => sioc <= '0';
+							when "01"   => sioc <= '1';
+							when "10"   => sioc <= '1';
+							when others => sioc <= '1';
+						end case;
+					when "100"&"000" => 
+						case counter(7 downto 6) is
+							when "00"   => sioc <= '1';
+							when "01"   => sioc <= '1';
+							when "10"   => sioc <= '1';
+							when others => sioc <= '1';
+						end case;
+					when "000"&"000" => 
+						case counter(7 downto 6) is
+							when "00"   => sioc <= '1';
+							when "01"   => sioc <= '1';
+							when "10"   => sioc <= '1';
+							when others => sioc <= '1';
+						end case;
+					when others      => 
+						case counter(7 downto 6) is --regular working of siod, neither beginning nor end
+							when "00"   => sioc <= '0';
+							when "01"   => sioc <= '1';
+							when "10"   => sioc <= '1';
+							when others => sioc <= '0';
+						end case;
+				end case;   
+
+				if counter = "11111111" then --frequency is about 200 khz due to 8 bit counter, actually 195.3 khz
+					busy_signal_reg <= busy_signal_reg(30 downto 0) & '0'; 
+					data_signal_reg <= data_signal_reg(30 downto 0) & '1';
+					counter <= (others => '0');
+				else
+					counter <= counter+1;
+				end if;
+			end if;
+		end if;
+	end process;
+	
+	process(busy_signal_reg, data_signal_reg(31))
+	begin
+		if busy_signal_reg(11 downto 10) = "10" or busy_signal_reg(20 downto 19) = "10" or busy_signal_reg(29 downto 28) = "10"  then
+		    siod <= 'Z'; --wait for ack 
+		else
+			siod <= data_signal_reg(31); --otherwise feed the bus
+		end if;
+	end process;
+end behavioral;
